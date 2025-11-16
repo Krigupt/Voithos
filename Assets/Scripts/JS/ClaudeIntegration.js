@@ -1,6 +1,7 @@
 // @input Component.Text suggestionText {"hint":"Text to display Claude's suggestion"}
 // @input Component.Text statusText {"hint":"Optional status text UI"}
 // @input Component.ScriptComponent rekaEmotionScript {"hint":"Drag the RekaEmotionAnalyzer script component"}
+// @input Component.ScriptComponent groqSceneScript {"hint":"Drag the GroqSceneAnalyzer script component"}
 // @input string claudeApiKey {"hint":"Anthropic API Key (x-api-key)"}
 // @input string claudeModel = "claude-3-5-sonnet-20241022" {"hint":"Anthropic model"}
 // @input float minInterval = 5.0 {"hint":"Min seconds between suggestions"}
@@ -56,7 +57,11 @@ function handleListeningUpdate(eventData) {
 
     // Pull emotion from RekaEmotionAnalyzer if available
     const emotion = getCurrentEmotionSafe();
-    requestClaudeSuggestion(pendingTranscript, emotion);
+    
+    // Pull scene analysis from GroqSceneAnalyzer if available
+    const sceneContext = getCurrentSceneSafe();
+    
+    requestClaudeSuggestion(pendingTranscript, emotion, sceneContext);
 }
 
 function getCurrentEmotionSafe() {
@@ -73,7 +78,21 @@ function getCurrentEmotionSafe() {
     return "Neutral";
 }
 
-async function requestClaudeSuggestion(transcript, emotion) {
+function getCurrentSceneSafe() {
+    try {
+        if (script.groqSceneScript && script.groqSceneScript.api && script.groqSceneScript.api.getCurrentAnalysis) {
+            const sceneAnalysis = script.groqSceneScript.api.getCurrentAnalysis();
+            if (sceneAnalysis && typeof sceneAnalysis === 'string' && sceneAnalysis !== "Analyzing...") {
+                return sceneAnalysis;
+            }
+        }
+    } catch (e) {
+        safeLog("⚠️ Failed to get scene analysis from Groq: " + e);
+    }
+    return "";
+}
+
+async function requestClaudeSuggestion(transcript, emotion, sceneContext) {
     if (isProcessing) {
         safeLog("⏸️ Already processing a suggestion");
         return;
@@ -92,12 +111,13 @@ async function requestClaudeSuggestion(transcript, emotion) {
     safeLog("========================================");
     safeLog("📝 Transcript: " + transcript);
     safeLog("😊 Emotion: " + emotion);
+    safeLog("🎬 Scene Context: " + (sceneContext || "No scene data"));
     safeLog("🔑 API Key Length: " + script.claudeApiKey.length);
     safeLog("🔑 API Key First 10 chars: " + script.claudeApiKey.substring(0, 10) + "...");
     safeLog("🔑 API Key Trimmed: " + script.claudeApiKey.trim().substring(0, 10) + "...");
     safeLog("========================================");
 
-    const prompt = buildPrompt(transcript, emotion);
+    const prompt = buildPrompt(transcript, emotion, sceneContext);
     
     // Trim the API key to remove any whitespace
     const apiKey = script.claudeApiKey.trim();
@@ -159,22 +179,32 @@ async function requestClaudeSuggestion(transcript, emotion) {
     }
 }
 
-function buildPrompt(transcript, emotion) {
+function buildPrompt(transcript, emotion, sceneContext) {
     const mood = emotion || "Neutral";
     
     let p = "CONVERSATION CONTEXT:\n";
     p += "━━━━━━━━━━━━━━━━━━━━━━\n";
     p += `User's Detected Emotion: ${mood}\n`;
-    p += `What they said: "${transcript}"\n\n`;
-
-    p += "TASK:\n";
+    p += `What they said: "${transcript}"\n`;
+    
+    // Add scene context if available
+    if (sceneContext && sceneContext.length > 0) {
+        p += `\n🎬 SCENE ANALYSIS (what the user is seeing):\n`;
+        p += `${sceneContext}\n`;
+    }
+    
+    p += "\nTASK:\n";
     p += "You are an empathetic conversation coach.\n";
-    p += "Analyze what the user said and their emotional tone carefully.\n";
+    p += "Analyze what the user said, their emotional tone, and the visual scene they're in.\n";
     p += "Generate ONE personalized and emotionally intelligent suggestion that:\n";
     p += "- Builds genuine rapport with the listener\n";
     p += "- Keeps the dialogue natural and human-like\n";
     p += "- Matches or gently balances their emotion\n";
-    p += "- Uses language that feels natural for the user’s tone and context\n";
+    p += "- Uses language that feels natural for the user's tone and context\n";
+    
+    if (sceneContext && sceneContext.length > 0) {
+        p += "- Takes into account the visual context of what they're seeing\n";
+    }
     
     if (mood === "Happy") {
         p += "- Reflect positivity and appreciation of their excitement\n";
